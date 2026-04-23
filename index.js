@@ -143,27 +143,17 @@ function startBot() {
 ========================= */
 
 // 1. رابط التشغيل الرئيسي
-app.get("/start", (req, res) => {
-  startBot();
-  res.send("<h1 style='color:green;'>Bot is now running LIVE! 🚀</h1><p>Check logs in Render to see activity.</p>");
-});
-
-// 2. رابط فحص الحالة والرصيد الحقيقي من بينانس
 app.get("/status", async (req, res) => {
   try {
     const balance = await binance.balance();
-    res.json({
-      bot_running: account.running,
-      current_btc_price: lastPrice,
-      wallet_balance: balance,
-      active_trades: account.openPositions,
-      history: account.closedPositions
-    });
+    res.json({ success: true, balance });
   } catch (error) {
+    // هذا الجزء سيخبرنا بالسبب الحقيقي للرفض
+    console.error("Full Error:", error);
     res.status(500).json({ 
-      error: "Binance Connection Failed", 
-      message: "تأكد من تفعيل التداول الفوري وضغط زر حفظ في بينانس",
-      details: error.message 
+      success: false, 
+      reason: error.message,
+      body: error.body // هنا سيظهر كود الخطأ من بينانس (مثل 401 أو 403)
     });
   }
 });
