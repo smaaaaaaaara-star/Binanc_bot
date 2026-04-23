@@ -5,7 +5,7 @@ import { RSI, EMA, BollingerBands } from "technicalindicators";
 const app = express();
 app.use(express.json());
 
-// --- 1. الاتصال ببينانس (آمن) ---
+// --- 1. الاتصال ببينانس ---
 const binance = new Binance().options({
   APIKEY: process.env.BINANCE_API_KEY,
   APISECRET: process.env.BINANCE_API_SECRET,
@@ -27,11 +27,11 @@ let activeTrades = [];
 let tradeHistory = [];
 let engineInterval = null;
 
-// 🧠 منع التكرار
+// منع التكرار
 let lastTradeTime = 0;
-const TRADE_COOLDOWN = 60000; // دقيقة
+const TRADE_COOLDOWN = 60000;
 
-// 🎯 precision ديناميكي
+// precision
 async function getStepSize(symbol) {
   try {
     const info = await binance.exchangeInfo();
@@ -47,7 +47,7 @@ function adjustQuantity(qty, step) {
   return (Math.floor(qty / step) * step).toFixed(5);
 }
 
-// --- 3. المحرك ---
+// --- 3. منطق التداول ---
 async function tradeLogic() {
   try {
     const candles = await binance.candlesticks(CONFIG.symbol, "5m");
@@ -62,7 +62,6 @@ async function tradeLogic() {
 
     const isEntryZone = currentPrice > ema50 && rsi < 35 && currentPrice <= bb.lower;
 
-    // 🛑 منع التكرار
     if (
       isEntryZone &&
       activeTrades.length < CONFIG.maxTrades &&
@@ -81,17 +80,14 @@ async function tradeLogic() {
           id: order.orderId || Date.now(),
           entryPrice: currentPrice,
           quantity: qty,
-          time: new Date().toLocaleTimeString(),
+          time: new Date().toISOString(),
           status: "ACTIVE"
         });
 
-        console.log("✅ شراء ناجح:", qty);
-      } else {
-        console.log("⚠️ فشل تنفيذ الشراء");
+        console.log("✅ شراء");
       }
     }
 
-    // إدارة الصفقات
     for (let i = activeTrades.length - 1; i >= 0; i--) {
       let trade = activeTrades[i];
       const profit = ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100;
@@ -104,41 +100,40 @@ async function tradeLogic() {
         if (sell && sell.status === "FILLED") {
           trade.exitPrice = currentPrice;
           trade.result = profit >= 0 ? "PROFIT" : "LOSS";
-          trade.exitTime = new Date().toLocaleTimeString();
+          trade.exitTime = new Date().toISOString();
 
           tradeHistory.unshift(trade);
           activeTrades.splice(i, 1);
 
-          console.log(`🛑 إغلاق صفقة: ${trade.result}`);
-        } else {
-          console.log("⚠️ فشل البيع");
+          console.log("🛑 إغلاق صفقة");
         }
       }
     }
+
   } catch (err) {
-    console.error("❌ Engine Error:", err.message);
+    console.error("Engine Error:", err.message);
   }
 }
 
 // --- 4. API ---
 
+// تشغيل/إيقاف
 app.get("/control/:action", (req, res) => {
   const { action } = req.params;
 
   if (action === "start") {
     if (!engineInterval) {
       engineInterval = setInterval(tradeLogic, 20000);
-      console.log("🚀 تم تشغيل البوت");
     }
-    return res.json({ message: "البوت يعمل الآن" });
+    return res.json({ message: "Bot started" });
   } else {
     clearInterval(engineInterval);
     engineInterval = null;
-    console.log("⛔ تم إيقاف البوت");
-    return res.json({ message: "تم إيقاف البوت" });
+    return res.json({ message: "Bot stopped" });
   }
 });
 
+// Dashboard
 app.get("/dashboard", async (req, res) => {
   try {
     const balance = await binance.balance();
@@ -148,15 +143,44 @@ app.get("/dashboard", async (req, res) => {
       activeTrades,
       isRunning: !!engineInterval
     });
-  } catch (e) {
-    res.status(500).send("Error fetching data");
+  } catch {
+    res.status(500).send("Error");
   }
 });
 
+// History
 app.get("/history", (req, res) => {
   res.json(tradeHistory);
 });
 
+// ✅ Status (الإضافة الوحيدة)
+app.get("/status", async (req, res) => {
+  try {
+    let binanceStatus = "disconnected";
+
+    try {
+      await binance.balance();
+      binanceStatus = "connected";
+    } catch {
+      binanceStatus = "error";
+    }
+
+    res.json({
+      server: "online",
+      binance: binanceStatus,
+      bot: engineInterval ? "running" : "stopped",
+      time: new Date().toISOString()
+    });
+
+  } catch (err) {
+    res.status(500).json({
+      server: "offline",
+      error: err.message
+    });
+  }
+});
+
+// شراء يدوي
 app.post("/manual-buy", async (req, res) => {
   try {
     const { amount } = req.body;
