@@ -1,173 +1,129 @@
 import express from "express";
-import dotenv from "dotenv";
 import Binance from "node-binance-api";
-
-// تفعيل قراءة ملفات البيئة (احتياطاً)
-dotenv.config();
+import { RSI, EMA, BollingerBands } from "technicalindicators";
 
 const app = express();
 app.use(express.json());
 
-/* =========================
-   🔐 BINANCE CONNECTION (DIRECT KEYS)
-   إعدادات كاملة لتجاوز كافة أخطاء الاتصال
-========================= */
-
+// --- 1. إعداد الاتصال ببينانس ---
 const binance = new Binance().options({
-  // ⚠️ ضع مفاتيحك الحقيقية هنا بدقة
-  APIKEY: 'rBOu1KZbNhYQPx7Bdl35JV6fYcHX0WKS7pcbRxngwaAvqf6e9lOuvsvf1EfzaDMT', 
-  APISECRET: 'IaKvN1DzNDt4SH5vzqbfB5fZ6eiZmC7dbiD77cn7WTsBGOfLyXw2zkX4RxS9yKdf',
-  
-  family: 4,               // ضروري لتجاوز قيود IPv6 في Render
-  useServerTime: true,     // حل جذري لمشكلة Binance Connection Failed (مزامنة الوقت)
-  recvWindow: 60000,       // نافذة انتظار طويلة لتفادي رفض الطلبات بسبب التأخير
-  log: () => {}            // الحفاظ على نظافة السجلات
+  APIKEY: 'ضع_مفتاحك_هنا', 
+  APISECRET: 'ضع_السكرت_هنا',
+  family: 4,              // مهم جداً لتجنب مشاكل الـ IPv6
+  useServerTime: true,
+  recvWindow: 60000
 });
 
-/* =========================
-   💰 ACCOUNT STATE
-========================= */
-
-let account = {
-  balance: 0,
-  openPositions: [],
-  closedPositions: [],
-  running: false
+// --- 2. متغيرات الحالة (State Management) ---
+const CONFIG = {
+  symbol: "BTCUSDT",
+  buyAmountUSDT: 15,      // مبلغ كل صفقة
+  maxTrades: 3,           // أقصى عدد صفقات مفتوحة
+  stopLossLimit: -2.0,    // وقف خسارة عند هبوط 2%
+  takeProfitLimit: 4.0    // جني ربح عند صعود 4%
 };
 
-/* =========================
-   📡 PRICE FETCH (REST API)
-========================= */
+let activeTrades = [];    // الصفقات المفتوحة الآن
+let tradeHistory = [];    // سجل الصفقات المنتهية
+let engineInterval = null;
 
-let lastPrice = 0;
-
-async function fetchPrice() {
+// --- 3. المحرك التحليلي (Logic) ---
+async function tradeLogic() {
   try {
-    const ticker = await binance.prices("BTCUSDT");
-    lastPrice = parseFloat(ticker.BTCUSDT);
-    // طباعة السعر في الـ Logs للتأكد من نجاح الاتصال
-    console.log(`[${new Date().toLocaleTimeString()}] BTC Price: ${lastPrice}`);
-  } catch (error) {
-    console.error("❌ Price fetch error:", error.message);
-  }
-}
+    const candles = await binance.candlesticks(CONFIG.symbol, "5m");
+    const closes = candles.map(c => parseFloat(c[4]));
+    const currentPrice = closes[closes.length - 1];
 
-// تحديث السعر كل 5 ثوانٍ
-setInterval(fetchPrice, 5000);
-fetchPrice();
+    if (closes.length < 50) return;
 
-/* =========================
-   🧠 STRATEGY ENGINE (Random RSI Simulation)
-========================= */
+    // حساب المؤشرات
+    const rsi = RSI.calculate({ values: closes, period: 14 }).pop();
+    const ema50 = EMA.calculate({ values: closes, period: 50 }).pop();
+    const bb = BollingerBands.calculate({ values: closes, period: 20, stdDev: 2 }).pop();
 
-function getSignal() {
-  const rsi = 30 + Math.random() * 40; 
-  if (rsi < 35) return 2; // إشارة شراء
-  if (rsi > 70) return -2; // إشارة بيع
-  return 0;
-}
-
-/* =========================
-   📥 REAL ORDER EXECUTION
-========================= */
-
-async function openTrade() {
-  try {
-    if (!lastPrice) return;
-    
-    // سيقوم بالشراء بمبلغ 15 USDT (تأكد من توفرها في محفظة Spot)
-    const amountInUSDT = 15;
-    const quantity = (amountInUSDT / lastPrice).toFixed(5); 
-
-    const order = await binance.marketBuy("BTCUSDT", quantity);
-
-    account.openPositions.push({
-      id: Date.now(),
-      entry: lastPrice,
-      qty: quantity,
-      orderId: order.orderId,
-      status: "OPEN"
-    });
-    console.log("🟢 SUCCESS: REAL BUY ORDER PLACED ON BINANCE");
-  } catch (e) {
-    console.error("❌ BUY ERROR:", e.body || e.message);
-  }
-}
-
-async function closeTrade(position) {
-  try {
-    await binance.marketSell("BTCUSDT", position.qty);
-    account.closedPositions.push({
-      ...position,
-      exit: lastPrice,
-      status: "CLOSED"
-    });
-    console.log("🔴 SUCCESS: REAL SELL ORDER PLACED ON BINANCE");
-  } catch (e) {
-    console.error("❌ SELL ERROR:", e.body || e.message);
-  }
-}
-
-/* =========================
-   🚀 BOT ENGINE
-========================= */
-
-function startBot() {
-  if (account.running) return;
-  account.running = true;
-  console.log("🤖 Bot Engine Activated and Watching Markets...");
-
-  setInterval(async () => {
-    if (!lastPrice) return;
-    const signal = getSignal();
-
-    // تنفيذ الشراء
-    if (signal > 1 && account.openPositions.length < 1) {
-      await openTrade();
+    // أ- منطق الدخول (شراء آلي)
+    const isEntryZone = currentPrice > ema50 && rsi < 35 && currentPrice <= bb.lower;
+    if (isEntryZone && activeTrades.length < CONFIG.maxTrades) {
+      const qty = (CONFIG.buyAmountUSDT / currentPrice).toFixed(5);
+      const order = await binance.marketBuy(CONFIG.symbol, qty);
+      
+      activeTrades.push({
+        id: order.orderId || Date.now(),
+        entryPrice: currentPrice,
+        quantity: qty,
+        time: new Date().toLocaleTimeString(),
+        status: "ACTIVE"
+      });
+      console.log("✅ تمت صفقة شراء آلية");
     }
 
-    // إدارة الصفقات المفتوحة (جني أرباح أو وقف خسارة)
-    for (let pos of account.openPositions) {
-      const profit = lastPrice - pos.entry;
-      if (profit > 10 || profit < -5) { 
-        await closeTrade(pos);
-        pos.status = "CLOSED";
+    // ب- إدارة الصفقات المفتوحة (خروج/تحديث)
+    for (let i = activeTrades.length - 1; i >= 0; i--) {
+      let trade = activeTrades[i];
+      const profit = ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100;
+      
+      trade.currentProfit = profit.toFixed(2) + "%";
+
+      // خروج (جني ربح أو وقف خسارة)
+      if (profit >= CONFIG.takeProfitLimit || profit <= CONFIG.stopLossLimit) {
+        await binance.marketSell(CONFIG.symbol, trade.quantity);
+        trade.exitPrice = currentPrice;
+        trade.result = profit >= 0 ? "PROFIT" : "LOSS";
+        trade.exitTime = new Date().toLocaleTimeString();
+        
+        tradeHistory.unshift(trade); // إضافة للسجل
+        activeTrades.splice(i, 1);   // إزالة من النشط
+        console.log(`🛑 إغلاق صفقة على ${trade.result}`);
       }
     }
-    account.openPositions = account.openPositions.filter(p => p.status === "OPEN");
-  }, 5000);
+  } catch (err) {
+    console.error("Engine Error:", err.message);
+  }
 }
 
-/* =========================
-   🌐 API ENDPOINTS
-========================= */
+// --- 4. الروابط الخاصة بتطبيق الأندرويد (API) ---
 
-// 1. رابط التشغيل الرئيسي
-app.get("/status", async (req, res) => {
-  try {
-    const balance = await binance.balance();
-    res.json({ success: true, balance });
-  } catch (error) {
-    // هذا الجزء سيخبرنا بالسبب الحقيقي للرفض
-    console.error("Full Error:", error);
-    res.status(500).json({ 
-      success: false, 
-      reason: error.message,
-      body: error.body // هنا سيظهر كود الخطأ من بينانس (مثل 401 أو 403)
-    });
+// أ- تشغيل/إيقاف البوت
+app.get("/control/:action", (req, res) => {
+  const { action } = req.params;
+  if (action === "start") {
+    if (!engineInterval) engineInterval = setInterval(tradeLogic, 20000);
+    return res.json({ message: "البوت يعمل الآن" });
+  } else {
+    clearInterval(engineInterval);
+    engineInterval = null;
+    return res.json({ message: "تم إيقاف البوت" });
   }
 });
 
-// 3. الصفحة الرئيسية لتجنب خطأ Cannot GET /
-app.get("/", (req, res) => {
-  res.send("<h1>Binance Bot Server is LIVE ✅</h1><p>Use /status to check balance or /start to begin trading.</p>");
+// ب- حالة لوحة التحكم (Dashboard)
+app.get("/dashboard", async (req, res) => {
+  try {
+    const balance = await binance.balance();
+    res.json({
+      usdt: balance.USDT ? balance.USDT.available : 0,
+      activeTrades: activeTrades,
+      isRunning: !!engineInterval
+    });
+  } catch (e) { res.status(500).send("Error fetching data"); }
 });
 
-/* =========================
-   🚀 SERVER START
-========================= */
+// ج- سجل الصفقات (History)
+app.get("/history", (req, res) => {
+  res.json(tradeHistory);
+});
+
+// د- شراء يدوي من التطبيق
+app.post("/manual-buy", async (req, res) => {
+  try {
+    const { amount } = req.body;
+    const ticker = await binance.prices(CONFIG.symbol);
+    const price = parseFloat(ticker[CONFIG.symbol]);
+    const qty = (amount / price).toFixed(5);
+    await binance.marketBuy(CONFIG.symbol, qty);
+    res.json({ success: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-  console.log(`✅ Server is active and listening on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`محرك التداول جاهز على منفذ ${PORT}`));
