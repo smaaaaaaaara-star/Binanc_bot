@@ -1,3 +1,15 @@
+// أضف هذه الأسطر في بداية الملف تماماً
+import dotenv from "dotenv";
+dotenv.config();
+
+const binance = new Binance().options({
+  APIKEY: process.env.BINANCE_API_KEY,
+  APISECRET: process.env.BINANCE_API_SECRET,
+  family: 4,               // ضروري لخوادم Render
+  useServerTime: true,     // حل مشكلة مزامنة الوقت
+  recvWindow: 60000        // زيادة وقت الانتظار لتفجنب الأخطاء
+});
+
 import express from "express";
 import dotenv from "dotenv";
 import Binance from "node-binance-api";
