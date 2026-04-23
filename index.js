@@ -1,19 +1,8 @@
-// أضف هذه الأسطر في بداية الملف تماماً
-import dotenv from "dotenv";
-dotenv.config();
-
-const binance = new Binance().options({
-  APIKEY: process.env.BINANCE_API_KEY,
-  APISECRET: process.env.BINANCE_API_SECRET,
-  family: 4,               // ضروري لخوادم Render
-  useServerTime: true,     // حل مشكلة مزامنة الوقت
-  recvWindow: 60000        // زيادة وقت الانتظار لتفجنب الأخطاء
-});
-
 import express from "express";
 import dotenv from "dotenv";
 import Binance from "node-binance-api";
 
+// إعداد متغيرات البيئة قبل أي شيء آخر
 dotenv.config();
 
 const app = express();
@@ -26,8 +15,9 @@ app.use(express.json());
 const binance = new Binance().options({
   APIKEY: process.env.BINANCE_API_KEY,
   APISECRET: process.env.BINANCE_API_SECRET,
-  family: 4, // ضروري لتجاوز قيود الشبكة على السيرفرات
-  useServerTime: true
+  family: 4,               // ضروري لخوادم Render لتجنب مشاكل الشبكة
+  useServerTime: true,     // حل مشكلة مزامنة الوقت مع بينانس
+  recvWindow: 60000        // زيادة وقت الانتظار لتفادي رفض الطلبات
 });
 
 /* =========================
@@ -53,11 +43,12 @@ async function fetchPrice() {
     const ticker = await binance.prices("BTCUSDT");
     lastPrice = parseFloat(ticker.BTCUSDT);
   } catch (error) {
+    // يظهر هذا الخطأ في الـ Logs إذا كانت المفاتيح غير صحيحة أو ناقصة
     console.error("Price fetch error:", error.message);
   }
 }
 
-// تحديث السعر كل 5 ثوانٍ لضمان استقرار الاتصال
+// تحديث السعر كل 5 ثوانٍ لضمان استقرار الاتصال دون حظر
 setInterval(fetchPrice, 5000);
 fetchPrice(); // جلب السعر فور التشغيل
 
@@ -78,7 +69,7 @@ function getSignal(price) {
 ========================= */
 
 function positionSize(balance) {
-  return balance * 0.01; 
+  return balance * 0.01; // تداول بـ 1% من المحفظة
 }
 
 /* =========================
@@ -136,10 +127,12 @@ function startBot() {
     if (!lastPrice) return;
     const signal = getSignal(lastPrice);
 
+    /* ENTRY */
     if (signal > 1 && account.openPositions.length < 1) {
       await openTrade();
     }
 
+    /* EXIT */
     for (let pos of account.openPositions) {
       const profit = lastPrice - pos.entry;
       if (profit > 5 || profit < -3) {
@@ -152,7 +145,7 @@ function startBot() {
 }
 
 /* =========================
-   🌐 API
+   🌐 API ENDPOINTS
 ========================= */
 
 app.post("/start", (req, res) => {
@@ -160,6 +153,7 @@ app.post("/start", (req, res) => {
   res.json({ status: "LIVE TRADING STARTED 🚀" });
 });
 
+// هذا الرابط لفحص الحالة والرصيد والسعر اللحظي
 app.get("/status", async (req, res) => {
   try {
     const balance = await binance.balance();
@@ -175,11 +169,11 @@ app.get("/status", async (req, res) => {
 });
 
 /* =========================
-   🚀 SERVER
+   🚀 SERVER INITIALIZATION
 ========================= */
 
 // استخدام المنفذ الديناميكي الخاص بـ Render
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`LIVE BINANCE BOT ACTIVE ON PORT ${PORT}`);
 });
