@@ -155,6 +155,10 @@ app.get("/status", async (req, res) => {
    🚀 SERVER
 ========================= */
 
-app.listen(3000, () => {
-  console.log("LIVE BINANCE BOT ACTIVE");
+// تحديد المنفذ ديناميكياً ليناسب بيئة تشغيل Render
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log(`LIVE BINANCE BOT ACTIVE ON PORT ${PORT}`);
 });
+
