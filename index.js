@@ -1,54 +1,100 @@
 import express from "express";
-import WebSocket from "ws";
+import dotenv from "dotenv";
+import Binance from "node-binance-api";
+
+dotenv.config();
 
 const app = express();
 app.use(express.json());
 
 /* =========================
-   🧠 STATE
+   🔐 BINANCE CONNECTION
 ========================= */
 
-let botRunning = false;
-let balance = 1000;
-let openTrades = [];
-let closedTrades = [];
-
-let price = 0;
+const binance = new Binance().options({
+  APIKEY: process.env.BINANCE_API_KEY,
+  APISECRET: process.env.BINANCE_API_SECRET
+});
 
 /* =========================
-   📡 LIVE DATA (Binance WebSocket)
+   💰 ACCOUNT STATE
 ========================= */
 
-const ws = new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@trade");
-
-ws.onmessage = (event) => {
-  const data = JSON.parse(event.data);
-  price = parseFloat(data.p);
+let account = {
+  balance: 0,
+  openPositions: [],
+  closedPositions: [],
+  running: false
 };
 
 /* =========================
-   🧠 STRATEGY ENGINE (REAL LOGIC)
+   📡 LIVE PRICE STREAM
 ========================= */
 
-function getSignal() {
-  const rsi = 30 + Math.random() * 40; // لاحقاً حقيقي
-  const emaTrend = Math.random();
+let lastPrice = 0;
+
+binance.websockets.trades(["BTCUSDT"], (trades) => {
+  lastPrice = parseFloat(trades.price);
+});
+
+/* =========================
+   🧠 STRATEGY ENGINE
+========================= */
+
+function getSignal(price) {
+  const rsi = 30 + Math.random() * 40;
 
   let score = 0;
-
   if (rsi < 35) score += 2;
-  if (rsi > 65) score -= 2;
-  if (emaTrend > 0.5) score += 2;
+  if (rsi > 70) score -= 2;
 
   return score;
 }
 
 /* =========================
-   💰 RISK ENGINE
+   💰 POSITION SIZE
 ========================= */
 
-function positionSize() {
-  return balance * 0.01;
+function positionSize(balance) {
+  return balance * 0.01; // 1%
+}
+
+/* =========================
+   📥 REAL ORDER EXECUTION
+========================= */
+
+async function openTrade() {
+  const balance = account.balance || 100;
+
+  const quantity = positionSize(balance) / lastPrice;
+
+  const order = await binance.marketBuy("BTCUSDT", quantity);
+
+  account.openPositions.push({
+    id: Date.now(),
+    entry: lastPrice,
+    qty: quantity,
+    orderId: order.orderId,
+    status: "OPEN"
+  });
+
+  console.log("🟢 REAL BUY EXECUTED");
+}
+
+/* =========================
+   📉 CLOSE TRADE
+========================= */
+
+async function closeTrade(position) {
+  await binance.marketSell("BTCUSDT", position.qty);
+
+  account.closedPositions.push({
+    ...position,
+    exit: lastPrice,
+    status: "CLOSED"
+  });
+
+  console.log("🔴 REAL SELL EXECUTED");
 }
 
 /* =========================
@@ -56,45 +102,31 @@ function positionSize() {
 ========================= */
 
 function startBot() {
-  if (botRunning) return;
-  botRunning = true;
+  if (account.running) return;
 
-  setInterval(() => {
-    if (!price) return;
+  account.running = true;
 
-    const signal = getSignal();
+  setInterval(async () => {
+    if (!lastPrice) return;
+
+    const signal = getSignal(lastPrice);
 
     /* ENTRY */
-    if (signal >= 2 && openTrades.length < 3) {
-      openTrades.push({
-        id: Date.now(),
-        entry: price,
-        size: positionSize(),
-        status: "OPEN"
-      });
+    if (signal > 1 && account.openPositions.length < 1) {
+      await openTrade();
     }
 
-    /* MANAGEMENT */
-    openTrades.forEach(t => {
-      const profit = (price - t.entry) * t.size;
+    /* EXIT */
+    for (let pos of account.openPositions) {
+      const profit = lastPrice - pos.entry;
 
-      const stopLoss = t.entry - 2;
-      const takeProfit = t.entry + 2;
-
-      if (price >= takeProfit || price <= stopLoss) {
-        closedTrades.push({
-          ...t,
-          exit: price,
-          profit,
-          status: profit > 0 ? "WIN" : "LOSS"
-        });
-
-        balance += profit;
-        t.status = "CLOSED";
+      if (profit > 5 || profit < -3) {
+        await closeTrade(pos);
+        pos.status = "CLOSED";
       }
-    });
+    }
 
-    openTrades = openTrades.filter(t => t.status === "OPEN");
+    account.openPositions = account.openPositions.filter(p => p.status === "OPEN");
 
   }, 3000);
 }
@@ -105,25 +137,24 @@ function startBot() {
 
 app.post("/start", (req, res) => {
   startBot();
-  res.json({ status: "LIVE BOT RUNNING 🚀" });
+  res.json({ status: "LIVE TRADING STARTED 🚀" });
 });
 
-app.get("/status", (req, res) => {
+app.get("/status", async (req, res) => {
+  const balance = await binance.balance();
+
   res.json({
-    price,
+    lastPrice,
     balance,
-    open: openTrades.length,
-    closed: closedTrades.length
+    open: account.openPositions,
+    closed: account.closedPositions
   });
 });
-
-app.get("/open", (req, res) => res.json(openTrades));
-app.get("/closed", (req, res) => res.json(closedTrades));
 
 /* =========================
    🚀 SERVER
 ========================= */
 
 app.listen(3000, () => {
-  console.log("LIVE BOT READY");
+  console.log("LIVE BINANCE BOT ACTIVE");
 });
