@@ -1,108 +1,96 @@
 import express from "express";
+import WebSocket from "ws";
 
 const app = express();
 app.use(express.json());
 
 /* =========================
-   🧠 PRO BOT STATE
+   🧠 STATE
 ========================= */
 
 let botRunning = false;
-let interval = null;
-
-let balance = 1000; // محاكاة
+let balance = 1000;
 let openTrades = [];
 let closedTrades = [];
 
-/* =========================
-   📊 MARKET SIMULATION (لاحقاً Binance)
-========================= */
-
-function getMarketPrice() {
-  return 100 + Math.sin(Date.now() / 10000) * 5 + Math.random();
-}
+let price = 0;
 
 /* =========================
-   🧠 INDICATORS ENGINE (مهم)
+   📡 LIVE DATA (Binance WebSocket)
 ========================= */
 
-function getSignal(price) {
-  const rsi = Math.random() * 100;
-  const trend = Math.random(); // لاحقاً EMA
+const ws = new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@trade");
+
+ws.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  price = parseFloat(data.p);
+};
+
+/* =========================
+   🧠 STRATEGY ENGINE (REAL LOGIC)
+========================= */
+
+function getSignal() {
+  const rsi = 30 + Math.random() * 40; // لاحقاً حقيقي
+  const emaTrend = Math.random();
 
   let score = 0;
 
-  if (rsi < 30) score += 3; // oversold
-  if (rsi > 70) score -= 3; // overbought
-  if (trend > 0.5) score += 2;
+  if (rsi < 35) score += 2;
+  if (rsi > 65) score -= 2;
+  if (emaTrend > 0.5) score += 2;
 
   return score;
 }
 
 /* =========================
-   💰 POSITION SIZE (Risk Mgmt)
+   💰 RISK ENGINE
 ========================= */
 
-function calculateSize() {
-  return balance * 0.01; // 1% risk
+function positionSize() {
+  return balance * 0.01;
 }
 
 /* =========================
-   🚀 BOT CORE ENGINE
+   🚀 BOT ENGINE
 ========================= */
 
 function startBot() {
   if (botRunning) return;
-
   botRunning = true;
 
-  interval = setInterval(() => {
-    const price = getMarketPrice();
-    const signal = getSignal(price);
+  setInterval(() => {
+    if (!price) return;
 
-    console.log("Price:", price, "Signal:", signal);
+    const signal = getSignal();
 
-    /* =========================
-       📥 ENTRY LOGIC (PRO)
-    ========================= */
-
-    if (signal >= 3 && openTrades.length < 5) {
-      const size = calculateSize();
-
+    /* ENTRY */
+    if (signal >= 2 && openTrades.length < 3) {
       openTrades.push({
         id: Date.now(),
         entry: price,
-        size,
-        direction: "BUY",
+        size: positionSize(),
         status: "OPEN"
       });
-
-      console.log("🟢 ENTER TRADE");
     }
 
-    /* =========================
-       📉 TRADE MANAGEMENT
-    ========================= */
+    /* MANAGEMENT */
+    openTrades.forEach(t => {
+      const profit = (price - t.entry) * t.size;
 
-    openTrades.forEach(trade => {
-      const profit = (price - trade.entry) * trade.size;
+      const stopLoss = t.entry - 2;
+      const takeProfit = t.entry + 2;
 
-      const tp = trade.entry + 2;
-      const sl = trade.entry - 2;
-
-      if (price >= tp || price <= sl) {
+      if (price >= takeProfit || price <= stopLoss) {
         closedTrades.push({
-          ...trade,
+          ...t,
           exit: price,
           profit,
-          status: profit > 0 ? "PROFIT" : "LOSS",
-          closedAt: new Date()
+          status: profit > 0 ? "WIN" : "LOSS"
         });
 
         balance += profit;
-        trade.status = "CLOSED";
-
-        console.log("🔴 CLOSE TRADE:", profit);
+        t.status = "CLOSED";
       }
     });
 
@@ -112,49 +100,30 @@ function startBot() {
 }
 
 /* =========================
-   🛑 STOP BOT
-========================= */
-
-function stopBot() {
-  botRunning = false;
-  clearInterval(interval);
-}
-
-/* =========================
    🌐 API
 ========================= */
 
-app.post("/start-bot", (req, res) => {
+app.post("/start", (req, res) => {
   startBot();
-  res.json({ status: "PRO BOT STARTED 🚀" });
-});
-
-app.post("/stop-bot", (req, res) => {
-  stopBot();
-  res.json({ status: "STOPPED 🛑" });
+  res.json({ status: "LIVE BOT RUNNING 🚀" });
 });
 
 app.get("/status", (req, res) => {
   res.json({
-    running: botRunning,
+    price,
     balance,
-    openTrades: openTrades.length,
-    closedTrades: closedTrades.length
+    open: openTrades.length,
+    closed: closedTrades.length
   });
 });
 
-app.get("/open-trades", (req, res) => {
-  res.json(openTrades);
-});
-
-app.get("/closed-trades", (req, res) => {
-  res.json(closedTrades);
-});
+app.get("/open", (req, res) => res.json(openTrades));
+app.get("/closed", (req, res) => res.json(closedTrades));
 
 /* =========================
-   🚀 SERVER START
+   🚀 SERVER
 ========================= */
 
 app.listen(3000, () => {
-  console.log("🚀 PRO BOT RUNNING");
+  console.log("LIVE BOT READY");
 });
