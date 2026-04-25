@@ -1,19 +1,19 @@
 {
-  "name": "binance-bot",
-  "version": "1.0.0",
-  "description": "Professional Binance Trading Bot with Technical Analysis",
-  "main": "index.js",
+  "name": "ultrabot-backend",
+  "version": "3.0.0",
   "type": "module",
+  "description": "UltraBot Professional Trading Backend",
+  "main": "index.js",
   "scripts": {
-    "start": "node index.js"
-  },
-  "dependencies": {
-    "express": "^4.18.2",
-    "node-binance-api": "^0.13.1",
-    "technicalindicators": "^3.1.0",
-    "dotenv": "^16.0.0"
+    "start": "node index.js",
+    "dev":   "node index.js"
   },
   "engines": {
-    "node": ">=14.0.0"
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "express":            "^4.18.2",
+    "node-binance-api":   "^0.15.0",
+    "technicalindicators":"^3.1.0"
   }
 }
